@@ -27,42 +27,68 @@
 #define NUM_MBUFS 			8192 
 #define MBUF_CACHE_SIZE		0
 #define BURST_SIZE			1024
+#define ARP_TABLE_SIZE		10
 
+struct arp_info
+{
+	uint64_t timestamp;
+	in_addr_t ipv4;
+	struct rte_ether_addr mac;
+};
 
-struct eth_info_item
+struct eth_info
 {
 	int eth_id;
 	in_addr_t eth_ipv4;
 	struct rte_ether_addr eth_mac;
+	struct arp_info arp_table[ARP_TABLE_SIZE];
+
 };
 
+struct dhcp_hdr
+{
+	uint8_t mtype;
+	uint8_t htype;
+	uint8_t hlen;
+	uint8_t hops;
+	uint32_t xid;
+	uint16_t secs;
+	uint16_t flags;
+	in_addr_t cipv4;
+	in_addr_t yipv4;
+	in_addr_t nipv4;
+	in_addr_t ripv4;
+	uint8_t cmac[16];
+	uint8_t sname[64];
+	uint8_t file[128];
+};
 
-struct eth_info{
+struct eth_info_list{
 	uint16_t nb_items;
 	uint16_t zero;
-	struct eth_info_item *items;
+	struct eth_info *items;
 };
 
 const struct rte_ether_addr broadcast_mac = {.addr_bytes = {0xff,0xff,0xff,0xff,0xff,0xff}};
 
-static void port_init(struct rte_mempool *mbuf_pool,struct eth_info* info) {
+static void port_init(struct rte_mempool *mbuf_pool,struct eth_info_list* eth_list) {
 	static const struct rte_eth_conf port_conf_default;
-	info->nb_items  = rte_eth_dev_count_avail();
-	if (info->nb_items == 0) {
+	eth_list->nb_items  = rte_eth_dev_count_avail();
+	if (eth_list->nb_items == 0) {
 		rte_exit(EXIT_FAILURE,"No Support eth found\n");
 	}
 
-	info->items = calloc(sizeof(struct eth_info_item *),info->nb_items);
-	if (!info->items) {
+	eth_list->items = calloc(sizeof(struct eth_info *),eth_list->nb_items);
+	if (!eth_list->items) {
 		rte_exit(EXIT_FAILURE,"No Mem calloc\n");
 	}
 
-	for (int i = 0;i < info->nb_items;i++) {
+	for (int i = 0;i < eth_list->nb_items;i++) {
 		const int num_rx_queues = 1;
 		const int num_tx_queues = 1;
 
-		info->items[i].eth_id = i;
-		rte_eth_macaddr_get(i,&info->items[i].eth_mac);
+		eth_list->items[i].eth_id = i;
+		rte_eth_macaddr_get(i,&eth_list->items[i].eth_mac);
 
 		if (0 > rte_eth_dev_configure(i,num_rx_queues,num_tx_queues,&port_conf_default)) {
 			rte_exit(EXIT_FAILURE,"rte_eth_dev_configure(): Failed\n");
@@ -79,23 +105,7 @@ static void port_init(struct rte_mempool *mbuf_pool,struct eth_info* info) {
 	}
 }
 
-static uint16_t checksum_16(uint16_t *addr, int count)
-{
-    uint32_t cksum=0;
-    while(count>1)
-    {
-        cksum+=*addr++;
-        count-=sizeof(uint16_t);
-    }
-    if(count)
-    {
-        cksum+=*(uint16_t*)addr;
-    }
-    cksum=(cksum>>16)+(cksum&0xffff);
-    return(uint16_t)(~cksum);
-}
-
-static struct rte_mbuf *rebuild_icmp_pkt(struct rte_mbuf *mbuf, uint32_t dip,uint32_t sip, 
+static void mbuf_icmp_pkt(struct rte_mbuf *mbuf, uint32_t dip,uint32_t sip, 
 												uint16_t id, uint16_t seqnb) 
 {
 	if (!mbuf) {
@@ -127,41 +137,33 @@ static struct rte_mbuf *rebuild_icmp_pkt(struct rte_mbuf *mbuf, uint32_t dip,uin
 	cksum = (cksum & 0xffff) + (cksum >> 16);
 	icmp->icmp_cksum = ~cksum;
 	icmp->icmp_cksum = icmp->icmp_cksum - 0x01;
-	return mbuf;
+	return;
 }
 
-static struct rte_mbuf *create_arp_response(struct rte_mempool *mbuf_pool, uint8_t *dst_mac, uint32_t dip,uint8_t *src_mac,uint32_t sip) {
-	struct rte_mbuf *mbuf = rte_pktmbuf_alloc(mbuf_pool);
-	if (!mbuf) {
-		rte_exit(EXIT_FAILURE, "rte_pktmbuf_alloc\n");
-	}
-	mbuf->pkt_len = sizeof(struct rte_ether_hdr) + sizeof(struct rte_arp_hdr);
-	mbuf->data_len = mbuf->pkt_len;
-	
-	struct rte_ether_hdr *eth = rte_pktmbuf_mtod(mbuf, struct rte_ether_hdr *);
+static void mbuf_arp_pkt(struct rte_mbuf *mbuf,struct rte_ether_addr *dst_mac, uint32_t dip,struct rte_ether_addr *src_mac,uint32_t sip) {
+	struct rte_ether_hdr *eth_h = rte_pktmbuf_mtod(mbuf, struct rte_ether_hdr *);
+	rte_ether_addr_copy(dst_mac,&eth_h->dst_addr);
+	rte_ether_addr_copy(src_mac,&eth_h->src_addr);
 
-	rte_memcpy(eth->src_addr.addr_bytes, src_mac, RTE_ETHER_ADDR_LEN);
-	rte_memcpy(eth->dst_addr.addr_bytes, dst_mac, RTE_ETHER_ADDR_LEN);
-	eth->ether_type = htons(RTE_ETHER_TYPE_ARP);
+	eth_h->ether_type = htons(RTE_ETHER_TYPE_ARP);
 
 	// 2 arp 
-	struct rte_arp_hdr *arp = (struct rte_arp_hdr *)(eth + 1);
-	arp->arp_hardware = htons(1);
-	arp->arp_protocol = htons(RTE_ETHER_TYPE_IPV4);
-	arp->arp_hlen = RTE_ETHER_ADDR_LEN;
-	arp->arp_plen = sizeof(uint32_t);
-	arp->arp_opcode = htons(2);
+	struct rte_arp_hdr *arp_h = (struct rte_arp_hdr *)(eth_h + 1);
+	arp_h->arp_hardware = htons(1);
+	arp_h->arp_protocol = htons(RTE_ETHER_TYPE_IPV4);
+	arp_h->arp_hlen = RTE_ETHER_ADDR_LEN;
+	arp_h->arp_plen = sizeof(uint32_t);
+	arp_h->arp_opcode = htons(2);
 
-	rte_memcpy(arp->arp_data.arp_sha.addr_bytes, src_mac, RTE_ETHER_ADDR_LEN);
-	rte_memcpy( arp->arp_data.arp_tha.addr_bytes, dst_mac, RTE_ETHER_ADDR_LEN);
-	arp->arp_data.arp_sip = sip;
-	arp->arp_data.arp_tip = dip;
-	
-	return mbuf;
+	rte_ether_addr_copy(&eth_h->src_addr, &arp_h->arp_data.arp_sha);
+	rte_ether_addr_copy(&eth_h->dst_addr, &arp_h->arp_data.arp_tha);
+
+	arp_h->arp_data.arp_sip = sip;
+	arp_h->arp_data.arp_tip = dip;
 }
 
 inline
-static int mbuf_ether_pkt(struct rte_mbuf *mbuf,struct rte_ether_addr *src,struct rte_ether_addr *dst,uint16_t type) {
+static void mbuf_ether_pkt(struct rte_mbuf *mbuf,struct rte_ether_addr *src,struct rte_ether_addr *dst,uint16_t type) {
 	struct rte_ether_hdr *eth_h = rte_pktmbuf_mtod(mbuf, struct rte_ether_hdr *);
 	rte_ether_addr_copy(src, &eth_h->src_addr);
 	rte_ether_addr_copy(dst, &eth_h->dst_addr);
@@ -169,7 +171,7 @@ static int mbuf_ether_pkt(struct rte_mbuf *mbuf,struct rte_ether_addr *src,struc
 }
 
 inline
-static int mbuf_ipv4_pkt(struct rte_mbuf *mbuf,uint32_t src,uint32_t dst,uint8_t proto_id,uint16_t payload_len) {
+static void mbuf_ipv4_pkt(struct rte_mbuf *mbuf,uint32_t src,uint32_t dst,uint8_t proto_id,uint16_t payload_len) {
 	struct rte_ipv4_hdr *ipv4_h = rte_pktmbuf_mtod_offset(mbuf,struct rte_ipv4_hdr *,sizeof(struct rte_ether_hdr));
 	ipv4_h->version_ihl = 0x45;
 	ipv4_h->src_addr = rte_cpu_to_be_32(src);
@@ -184,17 +186,19 @@ static int mbuf_ipv4_pkt(struct rte_mbuf *mbuf,uint32_t src,uint32_t dst,uint8_t
 	mbuf->pkt_len = sizeof(struct rte_ether_hdr) + sizeof(struct rte_ipv4_hdr) + payload_len;
 	mbuf->data_len = mbuf->pkt_len;
 }
-
-static int mbuf_udp_pkt(struct rte_mbuf *mbuf,struct eth_info_item *item) {
-	
-	mbuf_ether_pkt(mbuf,&item->eth_mac,&broadcast_mac,RTE_ETHER_TYPE_IPV4);
-	mbuf_ipv4_pkt(mbuf,0x00000000U,0xFFFFFFFFU,IPPROTO_UDP,0);
+inline
+static void mbuf_udp_pkt(struct rte_mbuf *mbuf,uint16_t src_port,uint16_t dst_port) {
 	struct rte_udp_hdr *udp_h = rte_pktmbuf_mtod_offset(mbuf,struct rte_udp_hdr *,sizeof(struct rte_ether_hdr) + sizeof(struct rte_ipv4_hdr));
-	udp_h->dst_port = 67;
-	udp_h->src_port = 68;
+	udp_h->dst_port = rte_cpu_to_be_16(src_port);
+	udp_h->src_port = rte_cpu_to_be_16(dst_port);
 	struct rte_ipv4_hdr *ipv4_h = rte_pktmbuf_mtod_offset(mbuf,struct rte_ipv4_hdr *,sizeof(struct rte_ether_hdr));
 	udp_h->dgram_cksum = rte_ipv4_udptcp_cksum(ipv4_h,udp_h);
 	return;
+}
+
+inline
+static void mbuf_udp_pkt_final(struct rte_mbuf *mbuf) {
+	
 }
 
 int main(int argc, char **argv)
@@ -208,26 +212,17 @@ int main(int argc, char **argv)
 	if (!mbuf_pool) {
 		rte_exit(EXIT_FAILURE,"rte_pktmbuf_pool_create(): Failed\n");
 	}
-	struct eth_info net_device_info;
-	port_init(mbuf_pool,&net_device_info);
-	net_device_info.items[0].eth_ipv4 = inet_addr("192.168.0.110");
-	
-	printf("local mac: \"%02x:%02x:%02x:%02x:%02x:%02x\"\n",
-										net_device_info.items[0].eth_mac.addr_bytes[0],
-										net_device_info.items[0].eth_mac.addr_bytes[1],
-										net_device_info.items[0].eth_mac.addr_bytes[2],
-										net_device_info.items[0].eth_mac.addr_bytes[3],
-										net_device_info.items[0].eth_mac.addr_bytes[4],
-										net_device_info.items[0].eth_mac.addr_bytes[5]);
-
+	struct eth_info_list eth_list;
+	port_init(mbuf_pool,&eth_list);
+	eth_list.items[0].eth_ipv4 = inet_addr("192.168.199.180");
+	eth_list.items[1].eth_ipv4 = inet_addr("192.168.199.181");
 	while (1)
 	{
 		struct rte_mbuf *mbufs[BURST_SIZE];
-		for (int i = 0;i < net_device_info.nb_items;i++) {
-			if (!net_device_info.items[i].eth_ipv4) {
+		for (int i = 0;i < eth_list.nb_items;i++) {
+			if (!eth_list.items[i].eth_ipv4) {
 
 			}
-
 			unsigned recved = rte_eth_rx_burst(i,0,mbufs,BURST_SIZE);
 			for (unsigned j = 0;j < recved; j++) {
 				struct rte_mbuf *mbuf = mbufs[j];
@@ -242,20 +237,21 @@ int main(int argc, char **argv)
 					} else if (iphdr->next_proto_id == IPPROTO_ICMP) {
 						struct rte_icmp_hdr *icmphdr = (struct rte_icmp_hdr *)(iphdr + 1);
 						if (icmphdr->icmp_type == RTE_IP_ICMP_ECHO_REQUEST) {
-							struct rte_mbuf *response = rebuild_icmp_pkt(mbuf,iphdr->src_addr,iphdr->dst_addr,
-																		icmphdr->icmp_ident, icmphdr->icmp_seq_nb);
-							rte_eth_tx_burst(i, 0, &response, 1);
+							mbuf_icmp_pkt(mbuf,iphdr->src_addr,iphdr->dst_addr,
+											icmphdr->icmp_ident, icmphdr->icmp_seq_nb);
+							rte_eth_tx_burst(i, 0, &mbuf, 1);
 						}
 					} else if (iphdr->next_proto_id == IPPROTO_TCP) {
 
 					}
 				} else if (ehdr->ether_type == rte_cpu_to_be_16(RTE_ETHER_TYPE_ARP)) {
 					struct rte_arp_hdr *arphdr = rte_pktmbuf_mtod_offset(mbuf,struct rte_arp_hdr *,sizeof(struct rte_ether_hdr));
-					struct rte_mbuf *response = create_arp_response(mbuf_pool,
-						ehdr->src_addr.addr_bytes,arphdr->arp_data.arp_tip,
-						net_device_info.items[i].eth_mac.addr_bytes,net_device_info.items[i].eth_ipv4);
-					rte_eth_tx_burst(i, 0, &response, 1);
-					rte_pktmbuf_free(response);
+					if (arphdr->arp_data.arp_tip == eth_list.items[i].eth_ipv4) {						//如果请求的是自己
+						mbuf_arp_pkt(mbuf,
+							&arphdr->arp_data.arp_sha,arphdr->arp_data.arp_sip,
+							&eth_list.items[i].eth_mac,eth_list.items[i].eth_ipv4);
+						rte_eth_tx_burst(i, 0, &mbuf, 1);
+					}
 				}
 				rte_pktmbuf_free(mbuf);
 			}
