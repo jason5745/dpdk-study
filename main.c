@@ -28,27 +28,54 @@
 #define MBUF_CACHE_SIZE		0
 #define BURST_SIZE			1024
 
-const int gDpdkPortId = 0;
-static void port_init(struct rte_mempool *mbuf_pool) {
+
+struct eth_info_item
+{
+	int eth_id;
+	in_addr_t eth_ipv4;
+	struct rte_ether_addr eth_mac;
+};
+
+
+struct eth_info{
+	uint16_t nb_items;
+	uint16_t zero;
+	struct eth_info_item *items;
+};
+
+const struct rte_ether_addr broadcast_mac = {.addr_bytes = {0xff,0xff,0xff,0xff,0xff,0xff}};
+
+static void port_init(struct rte_mempool *mbuf_pool,struct eth_info* info) {
 	static const struct rte_eth_conf port_conf_default;
-	uint16_t nb_sys_ports  = rte_eth_dev_count_avail();
-	if (nb_sys_ports == 0) {
+	info->nb_items  = rte_eth_dev_count_avail();
+	if (info->nb_items == 0) {
 		rte_exit(EXIT_FAILURE,"No Support eth found\n");
 	}
 
-	const int num_rx_queues = 1;
-	const int num_tx_queues = 1;
-	if (0 > rte_eth_dev_configure(gDpdkPortId,num_rx_queues,num_tx_queues,&port_conf_default)) {
-		rte_exit(EXIT_FAILURE,"rte_eth_dev_configure(): Failed\n");
+	info->items = calloc(sizeof(struct eth_info_item *),info->nb_items);
+	if (!info->items) {
+		rte_exit(EXIT_FAILURE,"No Mem calloc\n");
 	}
-	if (0 > rte_eth_rx_queue_setup(gDpdkPortId,0,RING_SIZE,rte_eth_dev_socket_id(gDpdkPortId), NULL, mbuf_pool)) {
-		rte_exit(EXIT_FAILURE,"rte_eth_rx_queue_setup(): Failed\n");
-	}
-	if (0 > rte_eth_tx_queue_setup(gDpdkPortId,0,RING_SIZE,rte_eth_dev_socket_id(gDpdkPortId), NULL)) {
-		rte_exit(EXIT_FAILURE,"rte_eth_tx_queue_setup(): Failed\n");
-	}
-	if (0 > rte_eth_dev_start(gDpdkPortId)) {
-		rte_exit(EXIT_FAILURE,"rte_eth_dev_start(): Failed\n");
+
+	for (int i = 0;i < info->nb_items;i++) {
+		const int num_rx_queues = 1;
+		const int num_tx_queues = 1;
+
+		info->items[i].eth_id = i;
+		rte_eth_macaddr_get(i,&info->items[i].eth_mac);
+
+		if (0 > rte_eth_dev_configure(i,num_rx_queues,num_tx_queues,&port_conf_default)) {
+			rte_exit(EXIT_FAILURE,"rte_eth_dev_configure(): Failed\n");
+		}
+		if (0 > rte_eth_rx_queue_setup(i,0,RING_SIZE,rte_eth_dev_socket_id(i), NULL, mbuf_pool)) {
+			rte_exit(EXIT_FAILURE,"rte_eth_rx_queue_setup(): Failed\n");
+		}
+		if (0 > rte_eth_tx_queue_setup(i,0,RING_SIZE,rte_eth_dev_socket_id(i), NULL)) {
+			rte_exit(EXIT_FAILURE,"rte_eth_tx_queue_setup(): Failed\n");
+		}
+		if (0 > rte_eth_dev_start(i)) {
+			rte_exit(EXIT_FAILURE,"rte_eth_dev_start(): Failed\n");
+		}
 	}
 }
 
@@ -76,7 +103,6 @@ static struct rte_mbuf *rebuild_icmp_pkt(struct rte_mbuf *mbuf, uint32_t dip,uin
 	}
 	struct rte_ether_hdr *eth = rte_pktmbuf_mtod(mbuf, struct rte_ether_hdr *);
 	struct rte_ether_addr tmp;
-
 	rte_ether_addr_copy(&eth->src_addr, &tmp);
 	rte_ether_addr_copy(&eth->dst_addr, &eth->src_addr);
 	rte_ether_addr_copy(&tmp, &eth->dst_addr);
@@ -134,6 +160,43 @@ static struct rte_mbuf *create_arp_response(struct rte_mempool *mbuf_pool, uint8
 	return mbuf;
 }
 
+inline
+static int mbuf_ether_pkt(struct rte_mbuf *mbuf,struct rte_ether_addr *src,struct rte_ether_addr *dst,uint16_t type) {
+	struct rte_ether_hdr *eth_h = rte_pktmbuf_mtod(mbuf, struct rte_ether_hdr *);
+	rte_ether_addr_copy(src, &eth_h->src_addr);
+	rte_ether_addr_copy(dst, &eth_h->dst_addr);
+	eth_h->ether_type = rte_cpu_to_be_16(type);
+}
+
+inline
+static int mbuf_ipv4_pkt(struct rte_mbuf *mbuf,uint32_t src,uint32_t dst,uint8_t proto_id,uint16_t payload_len) {
+	struct rte_ipv4_hdr *ipv4_h = rte_pktmbuf_mtod_offset(mbuf,struct rte_ipv4_hdr *,sizeof(struct rte_ether_hdr));
+	ipv4_h->version_ihl = 0x45;
+	ipv4_h->src_addr = rte_cpu_to_be_32(src);
+	ipv4_h->dst_addr = rte_cpu_to_be_32(dst);
+	ipv4_h->time_to_live = 64;
+	ipv4_h->next_proto_id = proto_id;
+	ipv4_h->fragment_offset = rte_cpu_to_be_16(0x4000);
+	ipv4_h->total_length = rte_cpu_to_be_16(payload_len + sizeof(struct rte_ipv4_hdr));
+	ipv4_h->hdr_checksum = 0;
+	ipv4_h->hdr_checksum = rte_ipv4_cksum(ipv4_h);
+
+	mbuf->pkt_len = sizeof(struct rte_ether_hdr) + sizeof(struct rte_ipv4_hdr) + payload_len;
+	mbuf->data_len = mbuf->pkt_len;
+}
+
+static int mbuf_udp_pkt(struct rte_mbuf *mbuf,struct eth_info_item *item) {
+	
+	mbuf_ether_pkt(mbuf,&item->eth_mac,&broadcast_mac,RTE_ETHER_TYPE_IPV4);
+	mbuf_ipv4_pkt(mbuf,0x00000000U,0xFFFFFFFFU,IPPROTO_UDP,0);
+	struct rte_udp_hdr *udp_h = rte_pktmbuf_mtod_offset(mbuf,struct rte_udp_hdr *,sizeof(struct rte_ether_hdr) + sizeof(struct rte_ipv4_hdr));
+	udp_h->dst_port = 67;
+	udp_h->src_port = 68;
+	struct rte_ipv4_hdr *ipv4_h = rte_pktmbuf_mtod_offset(mbuf,struct rte_ipv4_hdr *,sizeof(struct rte_ether_hdr));
+	udp_h->dgram_cksum = rte_ipv4_udptcp_cksum(ipv4_h,udp_h);
+	return;
+}
+
 int main(int argc, char **argv)
 {
 	//必要步骤
@@ -145,51 +208,57 @@ int main(int argc, char **argv)
 	if (!mbuf_pool) {
 		rte_exit(EXIT_FAILURE,"rte_pktmbuf_pool_create(): Failed\n");
 	}
-	port_init(mbuf_pool);
-	struct rte_ether_addr eth_macaddr;
-	in_addr_t eth_ipv4 = inet_addr("192.168.199.202");
-	rte_eth_macaddr_get(gDpdkPortId,&eth_macaddr);
+	struct eth_info net_device_info;
+	port_init(mbuf_pool,&net_device_info);
+	net_device_info.items[0].eth_ipv4 = inet_addr("192.168.0.110");
+	
 	printf("local mac: \"%02x:%02x:%02x:%02x:%02x:%02x\"\n",
-										eth_macaddr.addr_bytes[0],
-										eth_macaddr.addr_bytes[1],
-										eth_macaddr.addr_bytes[2],
-										eth_macaddr.addr_bytes[3],
-										eth_macaddr.addr_bytes[4],
-										eth_macaddr.addr_bytes[5]);
+										net_device_info.items[0].eth_mac.addr_bytes[0],
+										net_device_info.items[0].eth_mac.addr_bytes[1],
+										net_device_info.items[0].eth_mac.addr_bytes[2],
+										net_device_info.items[0].eth_mac.addr_bytes[3],
+										net_device_info.items[0].eth_mac.addr_bytes[4],
+										net_device_info.items[0].eth_mac.addr_bytes[5]);
+
 	while (1)
 	{
 		struct rte_mbuf *mbufs[BURST_SIZE];
-		unsigned recved = rte_eth_rx_burst(gDpdkPortId,0,mbufs,BURST_SIZE);
-		if (recved > BURST_SIZE) {
-			rte_exit(EXIT_FAILURE,"recved > BURST_SIZE: Failed\n");
-		}
-		for (unsigned i = 0;i < recved; i++) {
-			struct rte_ether_hdr *ehdr = rte_pktmbuf_mtod(mbufs[i],struct rte_ether_hdr *);
-			if (ehdr->ether_type == rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4)) {
-				struct rte_ipv4_hdr *iphdr = rte_pktmbuf_mtod_offset(mbufs[i],struct rte_ipv4_hdr *,sizeof(struct rte_ether_hdr));
-				if (iphdr->next_proto_id == IPPROTO_UDP) {
-					struct rte_udp_hdr *udphdr = (struct rte_udp_hdr *)(iphdr + 1);
-					uint16_t length = ntohs(udphdr->dgram_len);
-					*(char *)(udphdr + length) = '\0';
-				} else if (iphdr->next_proto_id == IPPROTO_ICMP) {
-					struct rte_icmp_hdr *icmphdr = (struct rte_icmp_hdr *)(iphdr + 1);
-					if (icmphdr->icmp_type == RTE_IP_ICMP_ECHO_REQUEST) {
-						struct rte_mbuf *response = rebuild_icmp_pkt(mbufs[i],iphdr->src_addr,iphdr->dst_addr,
-																	icmphdr->icmp_ident, icmphdr->icmp_seq_nb);
-						rte_eth_tx_burst(gDpdkPortId, 0, &response, 1);
-						printf("rte_eth_tx_burst icmp %d,%d\n",icmphdr->icmp_ident, icmphdr->icmp_seq_nb);
-					}
-				}
-			} else if (ehdr->ether_type == rte_cpu_to_be_16(RTE_ETHER_TYPE_ARP)) {
-				struct rte_arp_hdr *arphdr = rte_pktmbuf_mtod_offset(mbufs[i],struct rte_arp_hdr *,sizeof(struct rte_ether_hdr));
-				struct rte_mbuf *response = create_arp_response(mbuf_pool,
-					ehdr->src_addr.addr_bytes,arphdr->arp_data.arp_tip,
-					eth_macaddr.addr_bytes,eth_ipv4);
-				rte_eth_tx_burst(gDpdkPortId, 0, &response, 1); // 将数据send出去
-				rte_pktmbuf_free(response);
-				printf("RTE_ETHER_TYPE_ARP\n");
+		for (int i = 0;i < net_device_info.nb_items;i++) {
+			if (!net_device_info.items[i].eth_ipv4) {
+
 			}
-			rte_pktmbuf_free(mbufs[i]);
+
+			unsigned recved = rte_eth_rx_burst(i,0,mbufs,BURST_SIZE);
+			for (unsigned j = 0;j < recved; j++) {
+				struct rte_mbuf *mbuf = mbufs[j];
+				struct rte_ether_hdr *ehdr = rte_pktmbuf_mtod(mbuf,struct rte_ether_hdr *);
+				if (ehdr->ether_type == rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4)) {
+					struct rte_ipv4_hdr *iphdr = rte_pktmbuf_mtod_offset(mbuf,struct rte_ipv4_hdr *,sizeof(struct rte_ether_hdr));
+					if (iphdr->next_proto_id == IPPROTO_UDP) {
+						struct rte_udp_hdr *udphdr = (struct rte_udp_hdr *)(iphdr + 1);
+						uint16_t length = ntohs(udphdr->dgram_len);
+						*(char *)(udphdr + length) = '\0';
+
+					} else if (iphdr->next_proto_id == IPPROTO_ICMP) {
+						struct rte_icmp_hdr *icmphdr = (struct rte_icmp_hdr *)(iphdr + 1);
+						if (icmphdr->icmp_type == RTE_IP_ICMP_ECHO_REQUEST) {
+							struct rte_mbuf *response = rebuild_icmp_pkt(mbuf,iphdr->src_addr,iphdr->dst_addr,
+																		icmphdr->icmp_ident, icmphdr->icmp_seq_nb);
+							rte_eth_tx_burst(i, 0, &response, 1);
+						}
+					} else if (iphdr->next_proto_id == IPPROTO_TCP) {
+
+					}
+				} else if (ehdr->ether_type == rte_cpu_to_be_16(RTE_ETHER_TYPE_ARP)) {
+					struct rte_arp_hdr *arphdr = rte_pktmbuf_mtod_offset(mbuf,struct rte_arp_hdr *,sizeof(struct rte_ether_hdr));
+					struct rte_mbuf *response = create_arp_response(mbuf_pool,
+						ehdr->src_addr.addr_bytes,arphdr->arp_data.arp_tip,
+						net_device_info.items[i].eth_mac.addr_bytes,net_device_info.items[i].eth_ipv4);
+					rte_eth_tx_burst(i, 0, &response, 1);
+					rte_pktmbuf_free(response);
+				}
+				rte_pktmbuf_free(mbuf);
+			}
 		}
 	}
 	return 0;
