@@ -61,6 +61,7 @@ struct dhcp_hdr
 	uint8_t cmac[16];
 	uint8_t sname[64];
 	uint8_t file[128];
+	uint32_t magic_cookie;
 };
 
 struct eth_info_list{
@@ -201,6 +202,72 @@ static void mbuf_udp_pkt_final(struct rte_mbuf *mbuf) {
 	
 }
 
+
+static int
+fill_dhcp_option(uint8_t *packet, uint8_t code, uint8_t *data, uint8_t len)
+{
+    packet[0] = code;
+    packet[1] = len;
+    memcpy(&packet[2], data, len);
+
+    return len + (sizeof(uint8_t) * 2);
+}
+
+static void mbuf_dhcp_pkt_discover(struct rte_mbuf *mbuf,struct eth_info *eth) {
+	struct rte_ether_hdr *eth_h = rte_pktmbuf_mtod(mbuf, struct rte_ether_hdr *);
+	rte_ether_addr_copy(&eth->eth_mac, &eth_h->src_addr);
+	rte_ether_addr_copy(&broadcast_mac, &eth_h->dst_addr);
+	eth_h->ether_type = rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4);
+
+	struct rte_ipv4_hdr *ipv4_h = (struct rte_ipv4_hdr *)(eth_h + 1);
+	ipv4_h->version_ihl = 0x45;
+	ipv4_h->src_addr = 0;
+	ipv4_h->dst_addr = 0xFFFFFFFF;
+	ipv4_h->time_to_live = 64;
+	ipv4_h->next_proto_id = IPPROTO_UDP;
+	ipv4_h->fragment_offset = 0;
+	
+	struct rte_udp_hdr *udp_h = (struct rte_udp_hdr *)(ipv4_h + 1);	
+	udp_h->src_port = rte_cpu_to_be_16(68);
+	udp_h->dst_port = rte_cpu_to_be_16(67);
+
+	struct dhcp_hdr *dhcp_h = (struct dhcp_hdr *)(udp_h + 1);
+	dhcp_h->mtype = 1;
+	dhcp_h->htype = 1;
+	dhcp_h->hlen = 6;
+	dhcp_h->hops = 0;
+	dhcp_h->flags = rte_cpu_to_be_16(0x8000);
+	dhcp_h->cipv4 = 0;
+	dhcp_h->yipv4 = eth->eth_ipv4;
+	dhcp_h->nipv4 = 0;
+	dhcp_h->ripv4 = 0;
+	rte_memcpy(dhcp_h->cmac,eth->eth_mac.addr_bytes,6);
+	dhcp_h->xid = rte_cpu_to_be_32(0x5F5E000);
+	dhcp_h->secs = rte_cpu_to_be_16(0);
+	dhcp_h->magic_cookie = rte_cpu_to_be_32(0x63825363);
+
+	uint8_t *packet = (uint8_t *)(dhcp_h + 1);
+	uint8_t discover = 1;
+	uint8_t parameter_request_list[8] = {1,3,6,12,15,28,42,121};
+	uint8_t *identifler = "dhcp";
+	uint8_t *hostname = "DPDK Demo";
+	int len = 0;
+	len += fill_dhcp_option(&packet[len],53,&discover,1);
+	// len += fill_dhcp_option(&packet[len],55,parameter_request_list,8);
+	// len += fill_dhcp_option(&packet[len],60,identifler,strlen(identifler));
+	// len += fill_dhcp_option(&packet[len],12,hostname,strlen(hostname));
+	packet[len++] = 0xff;
+
+	ipv4_h->hdr_checksum = 0;
+	ipv4_h->total_length = rte_cpu_to_be_16(sizeof(struct rte_ipv4_hdr) + sizeof(struct rte_udp_hdr) + sizeof(struct dhcp_hdr) + len);
+	ipv4_h->hdr_checksum = rte_ipv4_cksum(ipv4_h);
+
+	udp_h->dgram_len = rte_cpu_to_be_16(sizeof(struct rte_udp_hdr) + sizeof(struct dhcp_hdr) + len);
+	udp_h->dgram_cksum = rte_ipv4_udptcp_cksum(ipv4_h,udp_h);
+	mbuf->pkt_len = sizeof(struct rte_ether_hdr) + sizeof(struct rte_ipv4_hdr) + sizeof(struct rte_udp_hdr) + sizeof(struct dhcp_hdr) + len;
+	mbuf->data_len = mbuf->pkt_len;
+}
+
 int main(int argc, char **argv)
 {
 	//必要步骤
@@ -214,8 +281,14 @@ int main(int argc, char **argv)
 	}
 	struct eth_info_list eth_list;
 	port_init(mbuf_pool,&eth_list);
-	eth_list.items[0].eth_ipv4 = inet_addr("192.168.199.180");
+	eth_list.items[0].eth_ipv4 = inet_addr("192.168.100.206");
 	eth_list.items[1].eth_ipv4 = inet_addr("192.168.199.181");
+
+	struct rte_mbuf *dhcp_mbuf =  rte_pktmbuf_alloc(mbuf_pool);
+	mbuf_dhcp_pkt_discover(dhcp_mbuf,&eth_list.items[0]);
+	rte_eth_tx_burst(eth_list.items[0].eth_id, 0, &dhcp_mbuf, 1);
+	rte_pktmbuf_free(dhcp_mbuf);
+
 	while (1)
 	{
 		struct rte_mbuf *mbufs[BURST_SIZE];
@@ -232,8 +305,14 @@ int main(int argc, char **argv)
 					if (iphdr->next_proto_id == IPPROTO_UDP) {
 						struct rte_udp_hdr *udphdr = (struct rte_udp_hdr *)(iphdr + 1);
 						uint16_t length = ntohs(udphdr->dgram_len);
-						*(char *)(udphdr + length) = '\0';
-
+						if (rte_be_to_cpu_16(udphdr->dst_port) == 68) {
+							printf("udp: %u->%u\n",ntohs(udphdr->src_port),ntohs(udphdr->dst_port));
+							for (int z = 0;z < length;z++) {
+								printf("%02x ",((uint8_t *)(udphdr + 1))[z]);
+							}
+							printf("\n");
+						}
+						
 					} else if (iphdr->next_proto_id == IPPROTO_ICMP) {
 						struct rte_icmp_hdr *icmphdr = (struct rte_icmp_hdr *)(iphdr + 1);
 						if (icmphdr->icmp_type == RTE_IP_ICMP_ECHO_REQUEST) {
