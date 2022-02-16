@@ -92,9 +92,6 @@ static void port_init(struct rte_mempool *mbuf_pool,struct eth_info_list* eth_li
 static void mbuf_icmp_pkt(struct rte_mbuf *mbuf, uint32_t dip,uint32_t sip, 
 												uint16_t id, uint16_t seqnb) 
 {
-	if (!mbuf) {
-		rte_exit(EXIT_FAILURE, "rte_pktmbuf_alloc\n");
-	}
 	struct rte_ether_hdr *eth = rte_pktmbuf_mtod(mbuf, struct rte_ether_hdr *);
 	struct rte_ether_addr tmp;
 	rte_ether_addr_copy(&eth->src_addr, &tmp);
@@ -185,6 +182,17 @@ static void mbuf_udp_pkt_final(struct rte_mbuf *mbuf) {
 	
 }
 
+
+static void dhcp_client_update_eth_info(dhcp_client_t *client,void *arg) {
+	struct eth_info *eth = arg;
+	if (eth) {
+		eth->eth_ipv4 = client->client;
+		struct in_addr ip;
+        ip.s_addr = eth->eth_ipv4;
+	    printf("dhcp_client->client: %s\n",inet_ntoa(ip));
+	}
+}
+
 int main(int argc, char **argv)
 {
 	//必要步骤
@@ -198,10 +206,18 @@ int main(int argc, char **argv)
 	}
 	struct eth_info_list eth_list;
 	port_init(mbuf_pool,&eth_list);
-	eth_list.items[0].eth_ipv4 = inet_addr("192.168.100.206");
-	eth_list.items[1].eth_ipv4 = inet_addr("192.168.199.181");
+	eth_list.items[0].eth_ipv4 = inet_addr("192.168.0.105");
+	eth_list.items[1].eth_ipv4 = inet_addr("192.168.0.104");
 
-	dhcp_client_init(&eth_list.items[0].dhcp_client,eth_list.items[0].eth_ipv4,eth_list.items[0].eth_mac);
+	dhcp_client_init(&eth_list.items[0].dhcp_client,
+					eth_list.items[0].eth_ipv4,eth_list.items[0].eth_mac,
+					dhcp_client_update_eth_info,&eth_list.items[0]);
+	
+	dhcp_client_init(&eth_list.items[1].dhcp_client,
+					eth_list.items[1].eth_ipv4,eth_list.items[1].eth_mac,
+					dhcp_client_update_eth_info,&eth_list.items[1]);
+	
+
 	while (1)
 	{
 		struct rte_mbuf *mbufs[BURST_SIZE];
