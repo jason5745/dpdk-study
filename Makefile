@@ -5,7 +5,7 @@
 APP = bbdev
 
 # all source are stored in SRCS-y
-SRCS-y := main.c
+SRCS-y := main.c dhcp.c
 
 PKGCONF ?= pkg-config
 
