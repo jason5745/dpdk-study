@@ -1,8 +1,3 @@
-
-#include <rte_eal.h>
-#include <rte_ethdev.h>
-#include <rte_mbuf.h>
-
 /*
  * Copyright (c) 2001,2002 Florian Schulze.
  * All rights reserved.
@@ -59,6 +54,7 @@
 #include "lwip/dhcp.h"
 #include "lwip/autoip.h"
 #include "lwip/etharp.h"
+#include "lwip/sockets.h"
 #include "lwip/opt.h"
 #include "lwip/netif.h"
 #include "lwip/ip_addr.h"
@@ -66,6 +62,7 @@
 /* lwIP netif includes */
 #include "netif/ethernet.h"
 #include "dpdkif.h"
+#include "tcpecho.h"
 
 static struct dhcp netif_dhcp1;
 static struct dhcp netif_dhcp2;
@@ -75,7 +72,7 @@ static void status_callback(struct netif *state_netif)
 {
     if(netif_is_up(state_netif)) {
 #if LWIP_IPV4
-    printf("status_callback == UP, local interface IP is %s\n", ip4addr_ntoa(netif_ip4_addr(state_netif)));
+    printf("netif %s == UP, local interface IP is %s\n", state_netif->name, ip4addr_ntoa(netif_ip4_addr(state_netif)));
 #else
     printf("status_callback == UP\n");
 #endif
@@ -142,6 +139,7 @@ int main(int argc, char **argv)
     err_t err;
     sys_sem_t init_sem;
     dpdk_mp_init(argc,argv);
+    lwip_socket_init();
     setvbuf(stdout, NULL,_IONBF, 0);
 
     sys_sem_new(&init_sem, 0);
@@ -151,10 +149,13 @@ int main(int argc, char **argv)
     sys_sem_wait(&init_sem);
     sys_sem_free(&init_sem);
     
+    tcpecho_init();
+
+    lwip_socket_thread_init();
     while (1) {
         dpdk_netif_poll(&netif1);
         dpdk_netif_poll(&netif2);
     }
-
+    lwip_socket_thread_cleanup();
     return 0;
 }

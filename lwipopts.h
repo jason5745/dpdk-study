@@ -298,7 +298,7 @@
  * LWIP_SNMP==1: Turn on SNMP module. UDP must be available for SNMP
  * transport.
  */
-#define LWIP_SNMP                       0
+#define LWIP_SNMP                       1
 
 /*
    ----------------------------------
@@ -308,7 +308,7 @@
 /**
  * LWIP_IGMP==1: Turn on IGMP module.
  */
-#define LWIP_IGMP                       0
+#define LWIP_IGMP                       1
 
 /*
    ----------------------------------
@@ -319,7 +319,7 @@
  * LWIP_DNS==1: Turn on DNS module. UDP must be available for DNS
  * transport.
  */
-#define LWIP_DNS                        0
+#define LWIP_DNS                        1
 
 /*
    ---------------------------------
@@ -425,6 +425,7 @@
    ---------- Threading options ----------
    ---------------------------------------
 */
+#define LWIP_NETIF_STATUS_CALLBACK 1
 
 #define LWIP_TCPIP_CORE_LOCKING    1
 

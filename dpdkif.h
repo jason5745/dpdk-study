@@ -35,9 +35,10 @@
 #include "lwip/netif.h"
 
 struct dpdkif {
-    uint32_t id;
-    uint32_t nb_rx_queue;
-    uint32_t nb_tx_queue;
+    uint8_t id;
+    uint8_t zero;
+    uint8_t nb_rx_queue;
+    uint8_t nb_tx_queue;
 };
 
 err_t dpdk_mp_init(int argc, char **argv);

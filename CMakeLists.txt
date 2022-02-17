@@ -14,14 +14,14 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${EXTRA_CFLGAS} -lpthread -g")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${EXTRA_CFLGAS}") 
 
 file(GLOB SOURCES
-    lwip/unix/port/*.c
-    lwip/api/*.c
-    lwip/core/*.c
-    lwip/core/ipv4/*.c
-    lwip/core/ipv6/*.c
-    lwip/netif/ppp/polarssl/*.c
-    lwip/netif/ppp/*.c
-    lwip/netif/*.c
+    lwip/contrib/ports/unix/port/*.c
+    lwip/src/api/*.c
+    lwip/src/core/*.c
+    lwip/src/core/ipv4/*.c
+    lwip/src/core/ipv6/*.c
+    lwip/src/netif/ethernet.c
+    lwip/contrib/apps/httpserver/httpserver-netconn.c
+    lwip/contrib/apps/tcpecho/tcpecho.c
     dpdk_lwip.c
     dpdkif.c
 )
@@ -32,8 +32,11 @@ target_link_libraries(dpdk ${PKGS_DEP_LDFLAGS})
 target_include_directories(dpdk
     PRIVATE 
         ${PROJECT_SOURCE_DIR}
-        ${PROJECT_SOURCE_DIR}/lwip/include
-        ${PROJECT_SOURCE_DIR}/lwip/unix/port/include
+        ${PROJECT_SOURCE_DIR}/lwip/src/include
+        ${PROJECT_SOURCE_DIR}/lwip/contrib/ports/unix/port/include
+        ${PROJECT_SOURCE_DIR}/lwip/contrib/apps/httpserver
+        ${PROJECT_SOURCE_DIR}/lwip/contrib/apps/tcpecho
+        
 )
 
 set(CPACK_PROJECT_NAME ${PROJECT_NAME})
