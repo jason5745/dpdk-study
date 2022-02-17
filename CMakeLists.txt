@@ -10,7 +10,7 @@ foreach(flag ${PKGS_DEP_CFLAGS})
 	set(EXTRA_CFLGAS "${EXTRA_CFLGAS} ${flag}") 
 endforeach(flag)
 
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${EXTRA_CFLGAS} -lpthread") 
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${EXTRA_CFLGAS} -lpthread -g") 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${EXTRA_CFLGAS}") 
 
 file(GLOB SOURCES
@@ -23,6 +23,7 @@ file(GLOB SOURCES
     lwip/netif/ppp/*.c
     lwip/netif/*.c
     dpdk_lwip.c
+    dpdkif.c
 )
 
 add_executable(dpdk  ${SOURCES})

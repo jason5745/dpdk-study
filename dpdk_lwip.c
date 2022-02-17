@@ -45,7 +45,6 @@
 
 /* lwIP core includes */
 #include "lwip/opt.h"
-
 #include "lwip/sys.h"
 #include "lwip/timeouts.h"
 #include "lwip/debug.h"
@@ -54,193 +53,108 @@
 #include "lwip/tcpip.h"
 #include "lwip/netif.h"
 #include "lwip/api.h"
-
 #include "lwip/tcp.h"
 #include "lwip/udp.h"
 #include "lwip/dns.h"
 #include "lwip/dhcp.h"
 #include "lwip/autoip.h"
-
-/* lwIP netif includes */
 #include "lwip/etharp.h"
-#include "netif/ethernet.h"
-
 #include "lwip/opt.h"
-
 #include "lwip/netif.h"
 #include "lwip/ip_addr.h"
 #include "lwip/tcpip.h"
-#include "netif/tapif.h"
+/* lwIP netif includes */
+#include "netif/ethernet.h"
+#include "dpdkif.h"
 
-#ifndef LWIP_EXAMPLE_APP_ABORT
-#define LWIP_EXAMPLE_APP_ABORT() 0
-#endif
-
-/** Define this to 1 to enable a port-specific ethernet interface as default interface. */
-#ifndef USE_DEFAULT_ETH_NETIF
-#define USE_DEFAULT_ETH_NETIF 1
-#endif
-
-/** Define this to 1 to enable a PPP interface. */
-#ifndef USE_PPP
-#define USE_PPP 0
-#endif
-
-/** Define this to 1 or 2 to support 1 or 2 SLIP interfaces. */
-#ifndef USE_SLIPIF
-#define USE_SLIPIF 0
-#endif
-
-/** Use an ethernet adapter? Default to enabled if port-specific ethernet netif or PPPoE are used. */
-#ifndef USE_ETHERNET
-#define USE_ETHERNET  (USE_DEFAULT_ETH_NETIF || PPPOE_SUPPORT)
-#endif
-
-/** Use an ethernet adapter for TCP/IP? By default only if port-specific ethernet netif is used. */
-#ifndef USE_ETHERNET_TCPIP
-#define USE_ETHERNET_TCPIP  (USE_DEFAULT_ETH_NETIF)
-#endif
-
-#ifndef USE_DHCP
-#define USE_DHCP    LWIP_DHCP
-#endif
-
-static struct dhcp netif_dhcp;
-static struct netif netif;
-
-#define NETIF_ADDRS ipaddr, netmask, gw,
-void init_default_netif(const ip4_addr_t *ipaddr, const ip4_addr_t *netmask, const ip4_addr_t *gw)
-{
-  netif_add(&netif, NETIF_ADDRS NULL, tapif_init, tcpip_input);
-  netif_set_default(&netif);
-}
-
-void
-default_netif_poll(void)
-{
-  tapif_poll(&netif);
-}
-
-void
-default_netif_shutdown(void)
-{
-}
+static struct dhcp netif_dhcp1;
+static struct dhcp netif_dhcp2;
 
 #if LWIP_NETIF_STATUS_CALLBACK
-static void
-status_callback(struct netif *state_netif)
+static void status_callback(struct netif *state_netif)
 {
-  if (netif_is_up(state_netif)) {
+    if(netif_is_up(state_netif)) {
 #if LWIP_IPV4
-    printf("status_callback==UP, local interface IP is %s\n", ip4addr_ntoa(netif_ip4_addr(state_netif)));
+    printf("status_callback == UP, local interface IP is %s\n", ip4addr_ntoa(netif_ip4_addr(state_netif)));
 #else
-    printf("status_callback==UP\n");
+    printf("status_callback == UP\n");
 #endif
   } else {
-    printf("status_callback==DOWN\n");
+    printf("status_callback == DOWN\n");
   }
 }
 #endif /* LWIP_NETIF_STATUS_CALLBACK */
 
 #if LWIP_NETIF_LINK_CALLBACK
-static void
-link_callback(struct netif *state_netif)
+static void link_callback(struct netif *state_netif)
 {
-  if (netif_is_link_up(state_netif)) {
-    printf("link_callback==UP\n");
-  } else {
-    printf("link_callback==DOWN\n");
-  }
+    if (netif_is_link_up(state_netif)) {
+        printf("link_callback == UP\n");
+    } else {
+        printf("link_callback == DOWN\n");
+    }
 }
 #endif /* LWIP_NETIF_LINK_CALLBACK */
 
-static void
-test_netif_init(void)
+static uint32_t fd1 = 0;
+static uint32_t fd2 = 1;
+
+static struct netif netif1;
+static struct netif netif2;
+
+static const struct dpdkif dpdk_if_1 = {
+    .id = 0,
+    .nb_rx_queue = 1,
+    .nb_tx_queue = 1,
+}; 
+
+static const struct dpdkif dpdk_if_2 = {
+    .id = 1,
+    .nb_rx_queue = 1,
+    .nb_tx_queue = 1,
+};
+
+static void tcpip_init_done(void *arg)
 {
-  ip4_addr_t ipaddr, netmask, gw;
-  err_t err;
+    sys_sem_t *init_sem = (sys_sem_t*)arg;
+    srand((unsigned int)time(NULL));
 
-  ip4_addr_set_zero(&gw);
-  ip4_addr_set_zero(&ipaddr);
-  ip4_addr_set_zero(&netmask);
-  printf("Starting lwIP, local interface IP is dhcp-enabled\n");
-  init_default_netif(&ipaddr, &netmask, &gw);
+    netif_add_noaddr(&netif1, (void *)&dpdk_if_1, dpdk_netif_init, tcpip_input);
+    netif_add_noaddr(&netif2, (void *)&dpdk_if_2, dpdk_netif_init, tcpip_input);
+    netif_set_default(&netif1);
 
-#if LWIP_NETIF_STATUS_CALLBACK
-  netif_set_status_callback(netif_default, status_callback);
-#endif /* LWIP_NETIF_STATUS_CALLBACK */
-#if LWIP_NETIF_LINK_CALLBACK
-  netif_set_link_callback(netif_default, link_callback);
-#endif /* LWIP_NETIF_LINK_CALLBACK */
+    netif_set_status_callback(&netif1, status_callback);
+    netif_set_status_callback(&netif2, status_callback);
 
-  dhcp_set_struct(netif_default, &netif_dhcp);
-  netif_set_up(netif_default);
-  err = dhcp_start(netif_default);
-  LWIP_ASSERT("dhcp_start failed", err == ERR_OK);
+	dhcp_set_struct(&netif1, &netif_dhcp1);
+	netif_set_up(&netif1);
+	dhcp_start(&netif1);
+
+	dhcp_set_struct(&netif2, &netif_dhcp2);
+	netif_set_up(&netif2);
+	dhcp_start(&netif2);
+
+    sys_sem_signal(init_sem);
 }
 
-
-#if LWIP_DNS_APP && LWIP_DNS
-static void
-dns_found(const char *name, const ip_addr_t *addr, void *arg)
+int main(int argc, char **argv)
 {
-  LWIP_UNUSED_ARG(arg);
-  printf("%s: %s\n", name, addr ? ipaddr_ntoa(addr) : "<not found>");
-}
-
-static void
-dns_dorequest(void *arg)
-{
-  const char* dnsname = "3com.com";
-  ip_addr_t dnsresp;
-  LWIP_UNUSED_ARG(arg);
-
-  if (dns_gethostbyname(dnsname, &dnsresp, dns_found, NULL) == ERR_OK) {
-    dns_found(dnsname, &dnsresp, NULL);
-  }
-}
-#endif /* LWIP_DNS_APP && LWIP_DNS */
-
-static void
-test_init(void * arg)
-{
-  sys_sem_t *init_sem;
-  LWIP_ASSERT("arg != NULL", arg != NULL);
-  init_sem = (sys_sem_t*)arg;
-  srand((unsigned int)time(NULL));
-  test_netif_init();
-  sys_sem_signal(init_sem);
-}
-
-int main(void)
-{
-    setvbuf(stdout, NULL,_IONBF, 0);
     err_t err;
     sys_sem_t init_sem;
-    err = sys_sem_new(&init_sem, 0);
+    dpdk_mp_init(argc,argv);
+    setvbuf(stdout, NULL,_IONBF, 0);
+
+    sys_sem_new(&init_sem, 0);
     LWIP_ASSERT("failed to create init_sem", err == ERR_OK);
     LWIP_UNUSED_ARG(err);
-    tcpip_init(test_init, &init_sem);
+    tcpip_init(tcpip_init_done, &init_sem);
     sys_sem_wait(&init_sem);
     sys_sem_free(&init_sem);
     
-#if (LWIP_SOCKET || LWIP_NETCONN) && LWIP_NETCONN_SEM_PER_THREAD
-    netconn_thread_init();
-#endif
-
-  /* MAIN LOOP for driver update (and timers if NO_SYS) */
-    while (!LWIP_EXAMPLE_APP_ABORT()) {
-
-        default_netif_poll();
-
-#if ENABLE_LOOPBACK && !LWIP_NETIF_LOOPBACK_MULTITHREADING
-    /* check for loopback packets on all netifs */
-        netif_poll_all();
-#endif /* ENABLE_LOOPBACK && !LWIP_NETIF_LOOPBACK_MULTITHREADING */
+    while (1) {
+        dpdk_netif_poll(&netif1);
+        dpdk_netif_poll(&netif2);
     }
-#if (LWIP_SOCKET || LWIP_NETCONN) && LWIP_NETCONN_SEM_PER_THREAD
-    netconn_thread_cleanup();
-#endif
-    default_netif_shutdown();
+
     return 0;
 }
