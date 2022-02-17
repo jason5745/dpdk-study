@@ -23,7 +23,7 @@
 #include <rte_mbuf.h>
 #include "dhcp.h"
 #include "eth.h"
-
+#include "lwip/debug.h"
 
 #define RING_SIZE			512
 #define NUM_MBUFS 			8192 

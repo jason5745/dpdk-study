@@ -110,11 +110,8 @@ static void dhcp_udp_decode(dhcp_client_t *dhcp_client,struct rte_udp_hdr *udp,u
         case DHCP_MESSAGE_TYPE:
             if (options[2] != type) return;
             break;
-        case DHCP_RENEWAL_TIME_VALUE:
-            dhcp_client->update_time = rte_be_to_cpu_32(*(uint32_t *)opt);
-            break;
         case DHCP_IP_ADDRESS_LEASE_TIME:
-            dhcp_client->update_time = rte_be_to_cpu_32(*(uint32_t *)opt)/2;
+            dhcp_client->update_time = rte_be_to_cpu_32(*(uint32_t *)opt)/200;
             break;
         case DHCP_SUBNET_MASK:
             dhcp_client->submask = rte_be_to_cpu_32(*(uint32_t *)opt);
