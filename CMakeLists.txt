@@ -22,6 +22,9 @@ file(GLOB SOURCES
     lwip/src/netif/ethernet.c
     lwip/contrib/apps/httpserver/httpserver-netconn.c
     lwip/contrib/apps/tcpecho/tcpecho.c
+    /root/dpdk-study/lwip/src/apps/mqtt/mqtt.c
+    paho.mqtt.c/src/*.c
+    mqtt_example.c
     dpdk_lwip.c
     dpdkif.c
 )
@@ -35,6 +38,7 @@ target_include_directories(dpdk
         ${PROJECT_SOURCE_DIR}/lwip/src/include
         ${PROJECT_SOURCE_DIR}/lwip/contrib/ports/unix/port/include
         ${PROJECT_SOURCE_DIR}/lwip/contrib/apps/httpserver
+        ${PROJECT_SOURCE_DIR}/paho.mqtt.c/src
         ${PROJECT_SOURCE_DIR}/lwip/contrib/apps/tcpecho
         
 )

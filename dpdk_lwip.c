@@ -37,6 +37,7 @@
 #include <stdlib.h>
 #include <time.h>
 #include <string.h>
+#include <pthread.h>
 
 /* lwIP core includes */
 #include "lwip/opt.h"
@@ -67,12 +68,18 @@
 static struct dhcp netif_dhcp1;
 static struct dhcp netif_dhcp2;
 
+
+#include "mqtt_example.h"
+
 #if LWIP_NETIF_STATUS_CALLBACK
 static void status_callback(struct netif *state_netif)
 {
     if(netif_is_up(state_netif)) {
 #if LWIP_IPV4
     printf("netif %s == UP, local interface IP is %s\n", state_netif->name, ip4addr_ntoa(netif_ip4_addr(state_netif)));
+    if (netif_ip4_addr(state_netif)->addr != 0) {
+        mqtt_example_init();
+    }
 #else
     printf("status_callback == UP\n");
 #endif
@@ -110,35 +117,34 @@ static const struct dpdkif dpdk_if_2 = {
     .nb_rx_queue = 1,
     .nb_tx_queue = 1,
 };
-
 static void tcpip_init_done(void *arg)
 {
     sys_sem_t *init_sem = (sys_sem_t*)arg;
     srand((unsigned int)time(NULL));
 
     netif_add_noaddr(&netif1, (void *)&dpdk_if_1, dpdk_netif_init, tcpip_input);
-    netif_add_noaddr(&netif2, (void *)&dpdk_if_2, dpdk_netif_init, tcpip_input);
+    // netif_add_noaddr(&netif2, (void *)&dpdk_if_2, dpdk_netif_init, tcpip_input);
     netif_set_default(&netif1);
 
     netif_set_status_callback(&netif1, status_callback);
-    netif_set_status_callback(&netif2, status_callback);
+    // netif_set_status_callback(&netif2, status_callback);
 
 	dhcp_set_struct(&netif1, &netif_dhcp1);
 	netif_set_up(&netif1);
 	dhcp_start(&netif1);
-
-	dhcp_set_struct(&netif2, &netif_dhcp2);
-	netif_set_up(&netif2);
-	dhcp_start(&netif2);
-
+	// dhcp_set_struct(&netif2, &netif_dhcp2);
+	// netif_set_up(&netif2);
+	// dhcp_start(&netif2);
+    
     sys_sem_signal(init_sem);
 }
 
-int main(int argc, char **argv)
+void main(void)
 {
     err_t err;
     sys_sem_t init_sem;
-    dpdk_mp_init(argc,argv);
+    char *p = (char *)&"";
+    dpdk_mp_init(0,&p);
     lwip_socket_init();
     setvbuf(stdout, NULL,_IONBF, 0);
 
@@ -148,14 +154,19 @@ int main(int argc, char **argv)
     tcpip_init(tcpip_init_done, &init_sem);
     sys_sem_wait(&init_sem);
     sys_sem_free(&init_sem);
-    
     tcpecho_init();
-
     lwip_socket_thread_init();
     while (1) {
         dpdk_netif_poll(&netif1);
-        dpdk_netif_poll(&netif2);
+        // dpdk_netif_poll(&netif2);
     }
     lwip_socket_thread_cleanup();
-    return 0;
+    return;
+}
+
+void lwip_example_app_platform_assert(const char *msg, int line, const char *file)
+{
+  printf("Assertion \"%s\" failed at line %d in %s\n", msg, line, file);
+  fflush(NULL);
+  abort();
 }

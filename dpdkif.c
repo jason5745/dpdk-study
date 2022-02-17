@@ -8,8 +8,10 @@
 #include "dpdkif.h"
 
 #include <rte_eal.h>
-#include <rte_ethdev.h>
 #include <rte_mbuf.h>
+
+#define ip6_hdr  ip6___hdr
+#include <rte_ethdev.h>
 
 static void dpdk_net_input(struct netif *netif);
 
@@ -83,7 +85,7 @@ low_level_output(struct netif *netif, struct pbuf *p)
         mbuf->pkt_len = _p->len;
         pbuf_count++;
     }
-
+    printf("%d\n",(u32_t)p->tot_len);
     rte_eth_tx_burst(eth->id, 0, mbufs, pbuf_count);
     rte_pktmbuf_free_bulk(mbufs, pbuf_count);
     MIB2_STATS_NETIF_ADD(netif, ifoutoctets, (u32_t)p->tot_len);
